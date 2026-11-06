@@ -8,6 +8,7 @@ No real network calls. No `.env` values read — env is set per test.
 from __future__ import annotations
 
 import json as json_module
+import re
 from typing import Any
 
 import pytest
@@ -817,3 +818,92 @@ class TestServiceHelpers:
                 raise RuntimeError("bad")
 
         assert service._extract_provider_request_id({}, _BadHeaders()) == "unknown"
+
+
+class TestModerationPromptContent:
+    """Prompt builders must not leak internal enum codes to the model."""
+
+    @pytest.mark.parametrize(
+        ("action_type", "label"),
+        [
+            ("agency_reject", "agency rejection"),
+            ("admin_reject", "administrator rejection"),
+        ],
+    )
+    def test_action_code_never_verbatim(self, action_type: str, label: str):
+        messages = service.build_moderation_messages(
+            action_type=action_type,
+            listing_title="Lagos Flat",
+            listing_description="Two-bed flat",
+            moderation_status="admin_review",
+            listing_type="sale",
+            location_name="Lagos, Nigeria",
+            price_text="5000000 NGN",
+        )
+        content = "\n".join(m["content"] for m in messages)
+        assert action_type not in content
+        assert label in content
+
+    def test_status_code_never_verbatim(self):
+        messages = service.build_moderation_messages(
+            action_type="admin_reject",
+            listing_title="Lagos Flat",
+            listing_description="Two-bed flat",
+            moderation_status="admin_review",
+        )
+        user_text = messages[1]["content"]
+        assert "admin_review" not in user_text
+        assert "admin review" in user_text
+
+    def test_unknown_codes_humanized(self):
+        messages = service.build_moderation_messages(
+            action_type="some_new_action",
+            listing_title="t",
+            listing_description="d",
+            moderation_status="some_new_status",
+        )
+        user_text = messages[1]["content"]
+        assert "some_new_action" not in user_text
+        assert "some_new_status" not in user_text
+        assert "some new action" in user_text
+        assert "some new status" in user_text
+
+    def test_revoke_has_no_word_standalone(self):
+        messages = service.build_moderation_messages(
+            action_type="revoke",
+            listing_title="t",
+            listing_description="d",
+            moderation_status="live",
+        )
+        content = "\n".join(m["content"] for m in messages)
+        assert re.search(r"\brevoke\b", content) is None
+        assert "revocation of a live listing" in content
+
+    def test_reviewer_instructions_present(self):
+        messages = service.build_moderation_messages(
+            action_type="agency_reject",
+            listing_title="t",
+            listing_description="d",
+            moderation_status="draft",
+        )
+        system_text = messages[0]["content"]
+        assert "Do not mention internal identifiers" in system_text
+        assert "say so plainly instead of drafting a reason" in system_text
+        assert "Never advise the reviewer" in system_text
+
+    def test_extra_context_and_delimiters_present(self):
+        messages = service.build_moderation_messages(
+            action_type="agency_reject",
+            listing_title="Lagos Flat",
+            listing_description="Two-bed flat",
+            moderation_status="draft",
+            listing_type="sale",
+            location_name="Lagos, Nigeria",
+            price_text="5000000 NGN",
+        )
+        user_text = messages[1]["content"]
+        assert "Listing type: sale" in user_text
+        assert "Location: Lagos, Nigeria" in user_text
+        assert "Price: 5000000 NGN" in user_text
+        assert "<<<UNTRUSTED_LISTING_TITLE" in user_text
+        assert "<<<UNTRUSTED_LISTING_DESCRIPTION" in user_text

@@ -164,7 +164,10 @@ def clear_ai_assist_logs() -> None:
 MODERATION_SYSTEM_PROMPT = (
     "You draft short, professional moderation reasons for a human reviewer. "
     "A human always edits and submits. Keep the draft under 80 words. "
-    "Never invent policy. Output the draft only."
+    "Never invent policy. Output the draft only. "
+    "Do not mention internal identifiers, status names, or field names. "
+    "If the listing gives no basis for the action, say so plainly instead of drafting a reason. "
+    "Never advise the reviewer to take a different action."
 )
 
 INQUIRY_SYSTEM_PROMPT = (
@@ -174,24 +177,54 @@ INQUIRY_SYSTEM_PROMPT = (
 )
 
 
+MODERATION_ACTION_LABELS = {
+    "agency_reject": "agency rejection",
+    "admin_reject": "administrator rejection",
+    "revoke": "revocation of a live listing",
+}
+
+
+def _humanize_code(value: str) -> str:
+    """Turn an internal snake_case code into plain words."""
+    return " ".join(value.split("_")).strip()
+
+
 def build_moderation_messages(
     *,
     action_type: str,
     listing_title: str,
     listing_description: str,
     moderation_status: str,
+    listing_type: str = "",
+    location_name: str = "",
+    price_text: str = "",
 ) -> list[dict[str, str]]:
-    """Build chat messages for a moderation-reason draft."""
+    """Build chat messages for a moderation-reason draft.
+
+    Enum codes are converted to plain wording first, so internal identifiers
+    never reach the model verbatim.
+    """
+    action_label = MODERATION_ACTION_LABELS.get(action_type, _humanize_code(action_type))
+    status_label = _humanize_code(moderation_status)
+    context_lines = [
+        f"Action: {action_label}",
+        f"Listing status: {status_label}",
+    ]
+    if listing_type:
+        context_lines.append(f"Listing type: {listing_type}")
+    if location_name:
+        context_lines.append(f"Location: {location_name}")
+    if price_text:
+        context_lines.append(f"Price: {price_text}")
     user_block = (
-        f"Action: {action_type}\n"
-        f"Listing status: {moderation_status}\n"
+        "\n".join(context_lines) + "\n"
         "<<<UNTRUSTED_LISTING_TITLE\n"
         f"{listing_title}\n"
         "END_UNTRUSTED_LISTING_TITLE>>>\n"
         "<<<UNTRUSTED_LISTING_DESCRIPTION\n"
         f"{listing_description}\n"
         "END_UNTRUSTED_LISTING_DESCRIPTION>>>\n"
-        f"Draft a moderation reason for {action_type}. "
+        f"Draft a moderation reason for {action_label}. "
         "A human will edit and submit."
     )
     return [

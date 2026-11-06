@@ -147,12 +147,23 @@ def suggest_moderation_reason(
     listing_description = str(getattr(listing, "description", "") or "")
     raw_status = getattr(listing, "moderation_status", "draft")
     moderation_status = str(getattr(raw_status, "value", raw_status))
+    listing_type = str(getattr(listing, "listing_type", "") or "")
+    location_name = str(getattr(listing, "location_name", "") or "")
+    price_value = getattr(listing, "price", None)
+    price_currency = str(getattr(listing, "price_currency", "") or "NGN")
+    if price_value is not None:
+        price_text = f"{price_value} {price_currency}".strip()
+    else:
+        price_text = ""
 
     messages = build_moderation_messages(
         action_type=body.action_type.value,
         listing_title=listing_title,
         listing_description=listing_description,
         moderation_status=moderation_status,
+        listing_type=listing_type,
+        location_name=location_name,
+        price_text=price_text,
     )
 
     local_request_id = uuid.uuid4().hex  # pragma: allowlist secret
